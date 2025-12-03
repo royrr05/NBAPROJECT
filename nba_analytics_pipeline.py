@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
+import matplotlib
+
+matplotlib.use("Agg")  # headless backend for saving figures without display
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import seaborn as sns
 from sklearn import metrics
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -14,6 +20,7 @@ from sklearn.preprocessing import StandardScaler
 
 FULL_DATA_FILE = "nba_2023_24_full_cleaned_dataset_RE_CLEANED_WITH_WIN.csv"
 MODEL_READY_FILE = "model_ready_WITH_TEAMS_FINAL.csv"
+FIG_DIR = Path("figures")
 
 FEATURE_COLS: List[str] = [
     "ORtg",
@@ -201,6 +208,111 @@ def build_style_clusters(
     return df, kmeans, pca, scaler, centroids_df, team_clusters
 
 
+def compute_elbow_scores(
+    full_df: pd.DataFrame,
+    feature_cols: Iterable[str] = FEATURE_COLS,
+    k_range: Iterable[int] = range(2, 9),
+) -> pd.DataFrame:
+    """Compute K-Means inertia across k values to support elbow selection."""
+    feature_cols = list(feature_cols)
+    df = full_df.dropna(subset=feature_cols + ["Team"]).copy()
+    X = df[feature_cols].values
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    inertias = []
+    ks = list(k_range)
+    for k in ks:
+        kmeans = KMeans(n_clusters=k, n_init=10, random_state=42)
+        kmeans.fit(X_scaled)
+        inertias.append(kmeans.inertia_)
+
+    results = pd.DataFrame({"k": ks, "inertia": inertias})
+    print("\nElbow scores (k vs inertia):")
+    print(results)
+    return results
+
+
+def run_eda_and_save_figures(full_df: pd.DataFrame, model_df: pd.DataFrame) -> None:
+    """Generate EDA visuals and save to figures/ folder."""
+    FIG_DIR.mkdir(exist_ok=True)
+
+    # Correlation heatmap for model features vs Win.
+    corr_cols = FEATURE_COLS + ["Win"]
+    corr = model_df[corr_cols].corr()
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(corr, annot=False, cmap="coolwarm", center=0)
+    plt.title("Correlation Heatmap (Features + Win)")
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "correlation_heatmap.png", dpi=200)
+    plt.close()
+
+    # Distribution plots for Four Factors.
+    factors = ["eFG%", "TS%", "TOV%", "ORB%", "FT/FGA", "3PAr"]
+    fig, axes = plt.subplots(2, 3, figsize=(12, 6))
+    for ax, col in zip(axes.flatten(), factors):
+        sns.histplot(model_df[col], kde=True, ax=ax, color="steelblue")
+        ax.set_title(f"{col} Distribution")
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "four_factors_distributions.png", dpi=200)
+    plt.close()
+
+    # Train model to get metrics for plots.
+    _, _, metrics_dict, coef_df = build_logistic_regression_model(model_df, FEATURE_COLS)
+
+    # Bar plot of coefficients.
+    plt.figure(figsize=(6, 4))
+    sns.barplot(data=coef_df, x="coefficient", y="feature", palette="Blues_r")
+    plt.axvline(0, color="black", linewidth=1)
+    plt.title("Logistic Regression Coefficients")
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "logistic_coefficients.png", dpi=200)
+    plt.close()
+
+    # ROC Curve
+    fpr, tpr, auc_val = (
+        metrics_dict["fpr"],
+        metrics_dict["tpr"],
+        metrics_dict["auc"],
+    )
+    plt.figure(figsize=(5, 4))
+    plt.plot(fpr, tpr, label=f"ROC (AUC={auc_val:.3f})", color="darkorange")
+    plt.plot([0, 1], [0, 1], linestyle="--", color="gray", label="Chance")
+    plt.xlabel("False Positive Rate")
+    plt.ylabel("True Positive Rate")
+    plt.title("ROC Curve (Win Model)")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "roc_curve.png", dpi=200)
+    plt.close()
+
+    # Confusion Matrix
+    cm = metrics_dict["confusion_matrix"]
+    plt.figure(figsize=(4, 3))
+    sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", cbar=False)
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.title("Confusion Matrix")
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "confusion_matrix.png", dpi=200)
+    plt.close()
+
+    # Elbow plot
+    elbow_df = compute_elbow_scores(full_df, FEATURE_COLS, k_range=range(2, 9))
+    plt.figure(figsize=(5, 3))
+    plt.plot(elbow_df["k"], elbow_df["inertia"], marker="o")
+    plt.xlabel("k (clusters)")
+    plt.ylabel("Inertia")
+    plt.title("Elbow Plot (K-Means)")
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(FIG_DIR / "elbow_plot.png", dpi=200)
+    plt.close()
+
+    print(f"\nEDA figures saved to: {FIG_DIR.resolve()}")
+
+
 def main() -> None:
     # Load data
     full_df, model_df = load_data()
@@ -213,6 +325,12 @@ def main() -> None:
 
     # Cluster team styles
     build_style_clusters(full_df, FEATURE_COLS, k=3)
+
+    # Elbow diagnostics for choosing k (no plotting here).
+    compute_elbow_scores(full_df, FEATURE_COLS, k_range=range(2, 8))
+
+    # Generate and save EDA visuals.
+    run_eda_and_save_figures(full_df, model_df)
 
     print("\nPipeline complete.")
 
