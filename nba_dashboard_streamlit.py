@@ -20,6 +20,62 @@ st.set_page_config(
     layout="wide",
 )
 
+PALETTE = {
+    "bg": "#0d0a0b",         # deep base
+    "panel": "#1b0f12",      # dark burgundy panels
+    "accent": "#ff2e2e",     # vivid red highlights
+    "chrome": "#d7d9df",     # chrome/silver accents
+    "text": "#f9f9fb",       # near-white text
+    "muted": "#c0c4cf",      # muted text
+}
+
+st.markdown(
+    f"""
+    <style>
+    :root {{
+        --app-gradient: radial-gradient(circle at 20% 20%, rgba(255,46,46,0.25), transparent 35%),
+                        radial-gradient(circle at 80% 10%, rgba(255,46,46,0.30), transparent 40%),
+                        radial-gradient(circle at 50% 80%, rgba(255,46,46,0.20), transparent 38%),
+                        linear-gradient(135deg, #1a0c0f, #0d0609 45%, #1c0e12);
+    }}
+    body, .main, .stApp, .block-container {{
+        background: var(--app-gradient) !important;
+        color: {PALETTE["text"]};
+        font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+    }}
+    .block-container {{
+        padding-top: 1.5rem;
+        padding-bottom: 1rem;
+    }}
+    h1, h2, h3, h4, h5, h6, p, span, div {{
+        color: {PALETTE["text"]} !important;
+    }}
+    .metric-card {{
+        background: linear-gradient(145deg, rgba(255,46,46,0.15), rgba(27,15,18,0.95));
+        padding: 1rem;
+        border-radius: 12px;
+        border: 1px solid rgba(191,195,201,0.25);
+        box-shadow: 0 10px 28px rgba(0,0,0,0.35);
+    }}
+    .sidebar .sidebar-content {{
+        background: linear-gradient(180deg, #1a0f12, #12090c);
+        color: {PALETTE["text"]};
+    }}
+    .stRadio > label, .stSelectbox > label, .stMarkdown, .stMetric {{
+        color: {PALETTE["text"]} !important;
+    }}
+    .stButton>button, .css-1emrehy.edgvbvh3 {{
+        background: linear-gradient(120deg, {PALETTE["accent"]}, #ff6b6b);
+        color: {PALETTE["text"]};
+        border: 1px solid {PALETTE["chrome"]};
+        border-radius: 8px;
+        box-shadow: 0 8px 24px rgba(255,46,46,0.25);
+    }}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 
 FEATURE_COLS = [
     "ORtg",
@@ -183,6 +239,16 @@ def compute_elbow(full_df: pd.DataFrame, k_min: int = 2, k_max: int = 8):
     return ks, inertias
 
 
+@st.cache_resource
+def compute_centroids_by_k(full_df: pd.DataFrame, ks: tuple[int, ...]):
+    """Compute centroids in original scale for each k in ks."""
+    centroids_map = {}
+    for k in ks:
+        _, _, _, centroids_df = compute_clusters(full_df, k=k)
+        centroids_map[k] = centroids_df
+    return centroids_map
+
+
 def plot_confusion_matrix(cm: np.ndarray):
     """Return a matplotlib figure for a 2x2 confusion matrix heatmap."""
     fig, ax = plt.subplots(figsize=(4, 3))
@@ -271,14 +337,36 @@ def plot_four_factor_distributions(model_df: pd.DataFrame):
     return fig
 
 
+def render_header(title: str, subtitle: str = ""):
+    """Render a stylized page header."""
+    st.markdown(
+        f"""
+        <div style="
+            background: linear-gradient(120deg, {PALETTE['panel']}, #0f1b33);
+            padding: 1.2rem 1.5rem;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.08);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+            margin-bottom: 1rem;
+        ">
+            <h1 style="margin: 0 0 0.25rem 0; color: {PALETTE['text']};">{title}</h1>
+            <p style="margin: 0; color: {PALETTE['muted']};">{subtitle}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # Load data and models once at startup.
 full_df, model_df = load_data()
 team_avgs = compute_team_averages(model_df)
 team_recent_10 = compute_team_recent(model_df, window=10)
+league_avg = team_avgs[FEATURE_COLS + ["Win"]].mean()
 loginfo = train_logistic_model(model_df)
 default_k = 3
 cluster_df, kmeans, cluster_features, centroids_df = compute_clusters(full_df, k=default_k)
 elbow_ks, elbow_inertias = compute_elbow(full_df, k_min=2, k_max=8)
+centroids_by_k = compute_centroids_by_k(full_df, ks=tuple(elbow_ks))
 
 
 st.sidebar.title("NBA 2023–24 Dashboard")
@@ -290,6 +378,7 @@ page = st.sidebar.radio(
         "Team Style Clusters",
         "Model Diagnostics",
         "Exploratory Analysis",
+        "Report & Deliverables",
     ],
 )
 help_expander = st.sidebar.expander("Help / Definitions")
@@ -310,7 +399,7 @@ with help_expander:
 
 
 if page == "Overview":
-    st.title("NBA 2023–24 Team Overview")
+    render_header("NBA 2023–24 Team Overview", "Team KPIs, Four Factors, and quick strengths/risks")
 
     form_choice = st.radio("View", ["Season average", "Last 10 games"], horizontal=True)
     metrics_df = team_avgs if form_choice == "Season average" else team_recent_10
@@ -320,10 +409,22 @@ if page == "Overview":
     team_row = metrics_df[metrics_df["Team"] == team_choice].iloc[0]
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Win %", f"{team_row['Win']*100:.1f}%")
-    col2.metric("ORtg", f"{team_row['ORtg']:.2f}")
-    col3.metric("DRtg", f"{team_row['DRtg']:.2f}")
-    col4.metric("NRtg", f"{team_row['NRtg']:.2f}")
+    with col1:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("Win %", f"{team_row['Win']*100:.1f}%")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col2:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("ORtg", f"{team_row['ORtg']:.2f}")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col3:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("DRtg", f"{team_row['DRtg']:.2f}")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with col4:
+        st.markdown('<div class="metric-card">', unsafe_allow_html=True)
+        st.metric("NRtg", f"{team_row['NRtg']:.2f}")
+        st.markdown("</div>", unsafe_allow_html=True)
 
     st.subheader("Four Factors Snapshot")
     factors = [
@@ -342,14 +443,29 @@ if page == "Overview":
     )
     st.dataframe(factor_df)
 
+    st.markdown("**Quick reads**")
     st.markdown(
         "- Higher ORtg, TS%, eFG% → more efficient scoring  \n"
         "- Lower DRtg, TOV% → better defense and ball security  \n"
         "- 3PAr shows how three-heavy the offense is"
     )
 
+    # Simple strengths/risks vs league average
+    insights = []
+    if team_row["ORtg"] > league_avg["ORtg"]:
+        insights.append("Offense above league ORtg average.")
+    if team_row["TS%"] > league_avg["TS%"]:
+        insights.append("Shooting efficiency (TS%) is a strength.")
+    if team_row["DRtg"] < league_avg["DRtg"]:
+        insights.append("Defense better than league average DRtg.")
+    if team_row["TOV%"] > league_avg["TOV%"]:
+        insights.append("Turnovers are higher than league average — watch ball security.")
+    if not insights:
+        insights = ["Profile is near league average across main factors."]
+    st.info(" | ".join(insights))
+
 elif page == "Matchup Explorer":
-    st.title("Matchup Explorer (Win Probability)")
+    render_header("Matchup Explorer (Win Probability)", "Compare two teams and see model baseline win odds")
 
     teams = team_avgs["Team"].unique()
     col_a, col_b = st.columns(2)
@@ -372,7 +488,7 @@ elif page == "Matchup Explorer":
         },
         index=metrics_list,
     ).round(2)
-    st.subheader("Team Comparison (Season Averages)")
+    st.subheader(f"Team Comparison ({form_choice})")
     st.dataframe(compare_df)
 
     X_match = pd.DataFrame([row_a[loginfo["feature_cols"]]], columns=loginfo["feature_cols"])
@@ -388,8 +504,19 @@ elif page == "Matchup Explorer":
         "_Assumptions: neutral court, season-average performance, no injuries or rest adjustments._"
     )
 
+    # Highlight edges
+    diffs = row_a[metrics_list] - row_b[metrics_list]
+    top_edges = diffs.reindex(diffs.abs().sort_values(ascending=False).head(3).index)
+    edge_lines = []
+    for m, v in top_edges.items():
+        if v > 0:
+            edge_lines.append(f"{team_a} edge in {m} (+{v:.2f} vs {team_b}).")
+        else:
+            edge_lines.append(f"{team_b} edge in {m} (+{-v:.2f} vs {team_a}).")
+    st.markdown("**Edge summary:** " + " ".join(edge_lines))
+
 elif page == "Team Style Clusters":
-    st.title("Team Style Clusters (K-Means, k = 3)")
+    render_header("Team Style Clusters", "Game-level styles grouped by K-Means; explore dynamic k")
     st.markdown(
         "Clusters group games by stylistic profile (tempo, shooting, turnovers, rebounding). "
         "They do not reflect standings—just similar tendencies."
@@ -421,25 +548,40 @@ elif page == "Team Style Clusters":
     ax.legend(title="Cluster")
     ax.grid(alpha=0.3)
     st.pyplot(fig)
+    st.caption(
+        "Data: game-level PCA on standardized features. Points colored by cluster (k selected). Use to spot style separation; Cluster 0 balanced/efficient, 1 fast/loose, 2 slow/defensive by default."
+    )
 
     st.subheader("Cluster Profiles (Centroids in Original Scale)")
     st.dataframe(centroids_dyn.round(2))
+    st.caption(
+        "Centroids back in original units for interpretability. Compare to league averages to see which metrics define each cluster’s style."
+    )
 
     st.subheader("Games per Team per Cluster")
     counts = cluster_df_dyn.groupby(["Team", "Cluster"]).size().unstack(fill_value=0)
     st.dataframe(counts)
+    st.caption("How often each team’s games fall into each cluster—helps gauge a team’s dominant style.")
+
+    with st.expander("Centroids by k (from elbow range)"):
+        for k in elbow_ks:
+            st.markdown(f"**k = {k}**")
+            st.dataframe(centroids_by_k[k].round(2))
 
     st.markdown(
         "Clusters represent similar offensive/defensive styles. Teams heavily represented in a cluster "
         "share tendencies such as pace, shooting profile, or turnover/rebounding patterns."
     )
+    st.info("Try different k values to see how styles split; k=3 keeps the story simple.")
 
     st.subheader("Elbow Plot (choose k)")
     st.pyplot(plot_elbow(elbow_ks, elbow_inertias))
-    st.markdown("Elbow helps pick a parsimonious k (look for the bend before inertia flattens).")
+    st.caption(
+        "Data: inertias from K-Means over k=2–8 on standardized features. The bend indicates parsimonious k choices (here ~3–5), aligning with our storytelling default of k=3."
+    )
 
 elif page == "Model Diagnostics":
-    st.title("Win Probability Model Diagnostics")
+    render_header("Win Probability Model Diagnostics", "AUC/ROC, confusion matrix, coefficients, and class metrics")
 
     st.metric("ROC AUC", f"{loginfo['auc']:.3f}")
 
@@ -448,12 +590,19 @@ elif page == "Model Diagnostics":
         st.pyplot(plot_confusion_matrix(loginfo["cm"]))
     with col_right:
         st.pyplot(plot_roc_curve(loginfo["fpr"], loginfo["tpr"], loginfo["auc"]))
+    st.caption(
+        "Data: test split from 2023–24 game-level model-ready dataset. Confusion matrix shows class performance; ROC/AUC (≈0.64) indicates moderate lift—use alongside scouting context."
+    )
 
     st.subheader("Coefficient Importance")
     st.pyplot(plot_coefficients(loginfo["model"], loginfo["feature_cols"]))
+    st.caption(
+        "Logistic coefficients on standardized features. Positive values raise win odds; TS%/NRtg/ORtg lead, DRtg/Pace negative in this fit."
+    )
 
     st.subheader("Coefficient Deltas (approx % points around 50%)")
     st.dataframe(coefficient_delta_table(loginfo["model"], loginfo["feature_cols"]).round(3))
+    st.caption("Approximate percentage-point change in win probability for a +1 change in each feature near a 50% baseline.")
 
     st.subheader("Class Metrics")
     # Build precision/recall/F1 table
@@ -479,15 +628,19 @@ elif page == "Model Diagnostics":
     )
 
 elif page == "Exploratory Analysis":
-    st.title("Exploratory Analysis")
+    render_header("Exploratory Analysis", "Correlations and distributions for core features")
 
     st.subheader("Correlation Heatmap")
     st.pyplot(plot_correlation_heatmap(model_df))
-    st.markdown("Shows how each feature relates to Win and to other metrics.")
+    st.caption(
+        "Data: 2023–24 game-level advanced stats (cleaned CSV). Shows pairwise correlations; TS%/eFG% trend positive with Win while DRtg trends negative, connecting directly to win drivers."
+    )
 
     st.subheader("Four Factors Distributions")
     st.pyplot(plot_four_factor_distributions(model_df))
-    st.markdown("Distributions of key shooting/possession factors across all games.")
+    st.caption(
+        "Data: same game-level stats. Distributions highlight league spread in shooting quality, turnovers, and rebounding—context for how extreme a team’s profile is."
+    )
 
     st.subheader("Top Predictors vs Win (Correlation)")
     corr = model_df[FEATURE_COLS + ["Win"]].corr()["Win"].drop("Win").sort_values(ascending=False)
@@ -495,3 +648,116 @@ elif page == "Exploratory Analysis":
     st.markdown(
         "Correlations give quick directional signal; the logistic model in Diagnostics captures combined effects."
     )
+
+elif page == "Report & Deliverables":
+    render_header("Project Report & Deliverables", "Rubric-aligned summary and report link")
+    st.markdown("Snapshot of rubric-aligned deliverables embedded in the app.")
+
+    st.subheader("Executive Summary (in-app)")
+    st.markdown(
+        "- Win model AUC ≈ 0.64 (moderate; better recall on losses). TS%, NRtg, ORtg lift win odds; DRtg/Pace negative in this fit.\n"
+        "- Style clusters (default k=3): Balanced/Efficient (0), Fast/Loose (1), Slow/Defensive (2).\n"
+        "- Built from 2023–24 game-level advanced stats (ORtg, DRtg, NRtg, Pace, eFG%, TS%, TOV%, ORB%, FT/FGA, 3PAr, Win)."
+    )
+
+    st.subheader("Three Key Insights")
+    st.markdown(
+        "1) Shooting quality dominates: TS%/eFG% strongly relate to wins and carry top positive coefficients.\n"
+        "2) Net efficiency beats raw pace: NRtg/ORtg help; higher Pace alone does not in this fit.\n"
+        "3) Styles are distinct: balanced vs fast/loose vs slow/defensive profiles enable targeted plans."
+    )
+
+    st.subheader("Two Recommendations")
+    st.markdown(
+        "- Coaching: emphasize TS%/eFG% and ball security; vs Fast/Loose slow pace and force half-court; vs Balanced guard shot quality.\n"
+        "- Front Office: recruit to raise TS% without spiking TOV%; use cluster identity to steer roster and matchup prep."
+    )
+
+    st.subheader("Problem Framing & Data Provenance")
+    st.markdown(
+        "- Goal: quantify 2023–24 NBA win drivers, predict outcomes, and profile team styles.\n"
+        "- Stakeholders: coaches (game plans), front office (identity/roster), betting/analytics (baseline probabilities).\n"
+        "- Data: cleaned game-level advanced stats (ORtg, DRtg, NRtg, Pace, eFG%, TS%, TOV%, ORB%, FT/FGA, 3PAr, Win) with Date/Team.\n"
+        "- Files loaded locally: `nba_2023_24_full_cleaned_dataset_RE_CLEANED_WITH_WIN.csv`, `model_ready_WITH_TEAMS_FINAL.csv`."
+    )
+
+    st.subheader("Data Dictionary (core fields)")
+    st.markdown(
+        "- ORtg/DRtg/NRtg: Offensive/Defensive/Net Rating (per 100 poss)\n"
+        "- Pace: possessions per 48\n"
+        "- eFG%, TS%: shooting efficiency\n"
+        "- TOV%: turnover rate per 100 poss\n"
+        "- ORB%: offensive rebound%\n"
+        "- FT/FGA: free throws per FGA\n"
+        "- 3PAr: 3PA per FGA\n"
+        "- Win: game outcome flag"
+    )
+
+    st.subheader("EDA Highlights")
+    st.markdown(
+        "- Correlations: TS%/eFG% positively relate to Win; DRtg negative.\n"
+        "- Distributions: Four Factors spread shown; outliers visible in turnover and rebounding profiles.\n"
+        "- League baselines: used for quick strengths/risks on Overview page."
+    )
+
+    st.subheader("Methods & Validation")
+    st.markdown(
+        "- Logistic Regression: features above; stratified 75/25 split; StandardScaler; max_iter=1000, random_state=42.\n"
+        "- K-Means clustering: same features; StandardScaler; dynamic k (2–6) with elbow guidance; PCA(2) for visualization.\n"
+        "- Diagnostics: ROC/AUC, confusion matrix, class metrics, coefficient deltas."
+    )
+
+    st.subheader("Results")
+    st.markdown(
+        "- Win model: AUC ≈ 0.64; stronger lift on losses; TS%/NRtg/ORtg most positive; DRtg/Pace negative in this fit.\n"
+        "- Clusters (k=3 default): Balanced/efficient (0), Fast/loose (1), Slow/defensive (2). Centroids shown per k."
+    )
+
+    st.subheader("Business Insights")
+    st.markdown(
+        "- Coaching: emphasize TS%/eFG% and ball security; vs Fast/Loose slow pace and force half-court; vs Balanced prioritize shot quality defense.\n"
+        "- Front Office: raise TS% without spiking TOV%; use cluster identity to guide roster composition.\n"
+        "- Betting/Analytics: model gives baseline probabilities; compare to market when efficiency shifts (injuries/rest) more than pace."
+    )
+
+    st.subheader("Limitations & Ethics")
+    st.markdown(
+        "- Context not modeled: injuries, rest, travel, home/away, rotations.\n"
+        "- Linear model; interactions/non-linear effects not captured.\n"
+        "- Responsible use: probabilities are supporting signals, not standalone betting advice."
+    )
+
+    st.subheader("Reproducibility")
+    st.markdown(
+        "- Pipeline: `python3 nba_analytics_pipeline.py` (generates figures under `figures/`).\n"
+        "- Dashboard: `streamlit run nba_dashboard_streamlit.py`.\n"
+        "- Caching: data/models cached; refresh on data updates."
+    )
+
+    st.subheader("Full Report (10-page, Times New Roman 12pt)")
+    report_link = st.text_input(
+        "Paste your report link (Google Doc/Drive/SharePoint)", value="", placeholder="https://..."
+    )
+    if report_link:
+        st.markdown(f"[Open full report]({report_link})")
+
+    with st.expander("In-app report summary"):
+        st.markdown(
+            "**Executive Summary**\n"
+            "Quantifies 2023–24 NBA win drivers, predicts outcomes, and profiles team styles. Win model AUC ≈ 0.64 (moderate; better recall on losses). TS%, NRtg, ORtg lift win probability; DRtg and higher Pace are negative in this fit. Clustering (k=3) surfaces Balanced/Efficient, Fast/Loose, and Slow/Defensive archetypes.\n\n"
+            "**Data & Methods**\n"
+            "- Data: game-level advanced stats (ORtg, DRtg, NRtg, Pace, eFG%, TS%, TOV%, ORB%, FT/FGA, 3PAr, Win) with Date/Team.\n"
+            "- Model: Logistic Regression on 10 features, stratified 75/25 split, StandardScaler, max_iter=1000, random_state=42; diagnostics include ROC/AUC, confusion matrix, class metrics, coefficient deltas.\n"
+            "- Clustering: K-Means with dynamic k (2–6) and elbow guidance; PCA(2) for visualization; centroids in original scale.\n\n"
+            "**Results**\n"
+            "- Win model AUC ≈ 0.64; TS% (+7.1pp per +1), NRtg (+6.8pp), ORtg positive; DRtg/Pace negative in this fit.\n"
+            "- Clusters: 0 Balanced/Efficient (moderate pace), 1 Fast/Loose (higher DRtg/variance), 2 Slow/Defensive (drag-down pace).\n\n"
+            "**Business Insights**\n"
+            "- Coaching: emphasize TS%/eFG% and ball security; vs Fast/Loose slow pace and force half-court; vs Balanced focus on shot-quality defense.\n"
+            "- Front Office: lift TS% without spiking TOV%; use cluster identity to steer roster/identity decisions.\n"
+            "- Betting/Analytics: baseline probabilities as a support signal; watch efficiency shifts (injuries/rest) more than pace; moderate AUC ⇒ not stand-alone.\n\n"
+            "**Limitations & Future Work**\n"
+            "- Context not modeled: injuries, rest, travel, home/away, rotations.\n"
+            "- Linear model; test calibrated non-linear models (XGBoost/RF), opponent-adjusted metrics, recent-form windows, schedule context.\n"
+            "- Expand dashboard: matchup-specific inputs, market vs model view."
+        )
